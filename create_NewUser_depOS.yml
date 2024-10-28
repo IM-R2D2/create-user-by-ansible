@@ -1,0 +1,69 @@
+---
+- name: Create a new user with sudo privileges and terminal access on different Linux OS
+  hosts: server ## CHANGE HOST 
+  become: yes
+  vars_files:
+    - ./ssh/vaults.yml
+  vars:
+    local_hmfld: "{{ lookup('env', 'HOME') }}"
+    remote_hmfld: "/home/{{ admin_server }}"
+    var_hst: "server" # CHANGE VAR FOR PLAYBOOK 
+
+  tasks:
+    - name: Determine the OS family
+      ansible.builtin.setup:
+        filter: ansible_os_family
+      register: os_info
+
+
+    - name: Create a new user and add to sudo/wheel group based on OS family
+      ansible.builtin.user:
+        name: "{{ admin_server }}"
+        password: "{{ lookup('vars', 'admin_pass_' + var_hst) | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: yes
+        groups: "{{ 'sudo' if os_info.ansible_facts.ansible_os_family == 'Debian' else 'wheel' }}"
+        append: yes # Add to the group 'sudo' or 'wheel' without removing from other groups
+
+    - name: Make directory for Source
+      ansible.builtin.file:
+        path: "{{ remote_hmfld }}/src"
+        state: directory
+        owner: "{{ admin_server }}"
+        group: "{{ admin_server }}"
+
+    - name: Make directory for SSH public key
+      ansible.builtin.file:
+        path: "{{ remote_hmfld }}/src/ssh"
+        state: directory
+        owner: "{{ admin_server }}"
+        group: "{{ admin_server }}"
+
+    - name: Copy public keys to user folders
+      ansible.builtin.copy:
+        src: "{{ local_hmfld }}/ansible/.ssh/{{ var_hst }}.pub" # the source folder
+        dest: "{{ remote_hmfld }}/src/ssh" # the destination
+        owner: "{{ admin_server }}"
+        group: "{{ admin_server }}"
+        mode: "0644"
+    
+    - name: Add SSH key to authorized_keys for the new user
+      ansible.builtin.authorized_key:
+        user: "{{ admin_server }}"
+        state: present
+        key: "{{ lookup('file', local_hmfld + '/ansible/.ssh/' + var_hst + '.pub') }}"
+    
+    - name: Remove SSH pub-key
+      ansible.builtin.file:
+        path: "{{ remote_hmfld }}/src/ssh"
+        state: absent
+
+    - name: Check SSH connectivity to host
+      ansible.builtin.shell: "echo SSH connection successful"
+      register: ssh_check_result
+      ignore_errors: yes
+
+    - name: Fail if SSH connectivity check fails
+      ansible.builtin.fail:
+        msg: "Unable to connect to the host via SSH using the provided key."
+      when: ssh_check_result.rc != 0

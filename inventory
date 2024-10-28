@@ -1,0 +1,10 @@
+
+[front_servers]
+server1 ansible_host=192.168.10.10 # CHANGE
+server2 ansible_host=192.168.11.10  # CHANGE
+
+[bkend_servers]
+server3 ansible_host=192.168.12.100 # CHANGE
+server4 ansible_host=192.168.13.100  # CHANGE
+
+
