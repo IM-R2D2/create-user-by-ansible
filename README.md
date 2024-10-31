@@ -1,13 +1,13 @@
 # Create User Playbook
 
-This repository contains an Ansible playbook designed to create a new user with sudo privileges across different Linux distributions. The playbook handles SSH key management, ensures user creation, and verifies SSH connectivity after setup.
+This repository contains an Ansible playbook for creating a new user with sudo privileges on target Linux servers, managing SSH key generation, and verifying SSH connectivity.
 
 ## Features
 - Automatically detects the operating system family (Debian, RedHat, etc.) to determine appropriate user group privileges (`sudo` or `wheel`).
-- Create a new user with sudo or wheel privileges, depending on the Linux distribution.
-- Manage user home directory, including creating necessary folders.
-- Copy SSH public keys to the server and set up authorized keys for SSH access.
-- Verify SSH connectivity after setup to ensure everything works as expected.
+- Creates a new user with sudo or wheel privileges, depending on the system.
+- Generates SSH key pairs on the remote host, configures authorized_keys, and copies keys to the local machine for backup.
+- Verifies SSH connectivity from localhost to the new user on the remote host using the generated keys.
+- Cleans up temporary variables and files after the playbook run.
 
 ## Requirements
 - Ansible 2.9+
@@ -21,11 +21,11 @@ This repository contains an Ansible playbook designed to create a new user with 
 Contains the vault password (`1234`) used for decrypting `vaults.yml`.
 
 ### Playbook: `create_user.yml`
-- Detects the operating system family to assign the correct user group (`sudo` for Debian-based systems, `wheel` for RedHat-based systems).
-The main playbook creates a user on the target servers:
-- The playbook uses different groups, such as `front_servers` and `bkend_servers`, defined in the inventory.
-- The new user is created with specified privileges (`sudo` for Debian-based systems, `wheel` for RedHat-based systems).
-- Public keys are copied to the server for SSH access.
+The main playbook for user creation, SSH key generation, and verification:
+- Prompts for input values like key_name, key_comment, and protect_phrase to customize SSH key details.
+- Saves key configurations and other settings temporarily in extra_vars.yml.
+- Runs tasks in blocks for modularity: user creation, SSH directory setup, key generation, and local key backup.
+ Cleans up extra_vars.yml after the playbook completes to maintain security.
 
 ### Configuration: `ansible.cfg`
 Specifies Ansible settings such as:
@@ -38,8 +38,8 @@ Contains the list of target servers:
 
 ### Encrypted Variables: `vaults.yml`
 Contains encrypted credentials, such as:
-- User passwords
-- Admin credentials
+- User and admin passwords
+- The vault file is encrypted to protect sensitive information, with a password file (password.txt).
 
 The vault file is encrypted for security with a password (`1234`).
 
@@ -65,7 +65,7 @@ Contains variables that apply to specific groups of servers.
 3. **Run the Playbook**
    Run the playbook with the following command:
    ```bash
-   ansible-playbook create_user.yml --vault-password-file=password.txt
+   ansible-playbook create_user.yml --ask-vault-pass
    ```
    This will use the vault password (`1234`) stored in `password.txt` to decrypt sensitive information.
 
