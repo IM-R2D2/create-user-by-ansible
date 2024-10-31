@@ -1,69 +1,174 @@
 ---
-- name: Create a new user with sudo privileges and terminal access on different Linux OS
-  hosts: server ## CHANGE HOST 
+# Playbook 1: SSH Key Generation and Configuration
+- name: SSH Key Generation and Configuration
+  hosts: "{{ key_name }}"
+  gather_facts: yes
   become: yes
   vars_files:
-    - ./ssh/vaults.yml
+    - ~/projects/keys/vaults.yml
+  vars_prompt:
+    # Prompting the user for key details such as the key name, comment, and passphrase
+    - name: key_name
+      prompt: "Enter the SSH key name [like host_vars]"
+      private: no
+    - name: key_comment
+      prompt: "Enter the SSH key comment [usually email]"
+      private: no
+    - name: protect_phrase
+      prompt: "Enter passphrase for keys"
+      private: yes
   vars:
+    # Defining local and remote directories for storing SSH keys and other variables
     local_hmfld: "{{ lookup('env', 'HOME') }}"
-    remote_hmfld: "/home/{{ admin_server }}"
-    var_hst: "server" # CHANGE VAR FOR PLAYBOOK 
+    localfld_ssh: "{{ local_hmfld }}/projects/keys/.ssh"
+    remote_hmfld: "/home/{{ great_admin }}"
+    remote_host: "{{ key_name }}"
 
   tasks:
-    - name: Determine the OS family
-      ansible.builtin.setup:
-        filter: ansible_os_family
-      register: os_info
+    # Block 1: Create a user with Bash shell and add to the sudo/wheel group
+    - block:
+        # Save certain variables to a file for later use (e.g., private key path, remote host)
+        - name: Save rem_host_key and localssh to a file for later use
+          delegate_to: localhost
+          become: no
+          copy:
+            content: |
+              ---
+              rem_host_key: "{{ remote_host }}"
+              localssh: "{{ localfld_ssh }}"
+              great_admin: "{{ great_admin }}"
+            dest: /tmp/extra_vars.yml
 
+        # Create a new user on the remote machine with privileges to execute administrative tasks
+        - name: Create a new user and add to sudo/wheel group based on OS family
+          ansible.builtin.user:
+            name: "{{ great_admin }}"
+            password: "{{ lookup('vars', 'admin_pass_' + remote_host) | password_hash('sha512') }}"
+            shell: /bin/bash
+            create_home: yes
+            groups: "{{ 'sudo' if ansible_facts['os_family'] == 'Debian' else 'wheel' }}"
+            append: yes
+          become: yes
+      name: Create user with sudo privileges and save variables
 
-    - name: Create a new user and add to sudo/wheel group based on OS family
-      ansible.builtin.user:
-        name: "{{ admin_server }}"
-        password: "{{ lookup('vars', 'admin_pass_' + var_hst) | password_hash('sha512') }}"
-        shell: /bin/bash
-        create_home: yes
-        groups: "{{ 'sudo' if os_info.ansible_facts.ansible_os_family == 'Debian' else 'wheel' }}"
-        append: yes # Add to the group 'sudo' or 'wheel' without removing from other groups
+    # Block 2: Create necessary directories for SSH configuration
+    - block:
+        # Create a source directory for storing key generation and other related operations
+        - name: Make directory for Source
+          ansible.builtin.file:
+            path: "{{ remote_hmfld }}/src"
+            state: directory
+            owner: "{{ great_admin }}"
+            group: "{{ great_admin }}"
+            mode: '0700'
 
-    - name: Make directory for Source
+        # Create a temporary directory specifically for storing SSH public keys
+        - name: Make temporary directory for SSH public key
+          ansible.builtin.file:
+            path: "{{ remote_hmfld }}/src/.ssh"
+            state: directory
+            owner: "{{ great_admin }}"
+            group: "{{ great_admin }}"
+            mode: "0700"
+
+        # Create the .ssh directory for the newly created user
+        - name: Create .ssh directory for the new user
+          ansible.builtin.file:
+            path: "/home/{{ great_admin }}/.ssh"
+            state: directory
+            owner: "{{ great_admin }}"
+            group: "{{ great_admin }}"
+            mode: "0700"
+      become: yes
+      name: Create directories for SSH keys
+
+    # Block 3: Generate SSH keys and configure authorized_keys
+    - block:
+        # Generate an SSH key pair on the remote host
+        - name: Generate SSH key pair on remote host
+          ansible.builtin.command:
+            cmd: "ssh-keygen -t ed25519 -f {{ remote_hmfld }}/src/.ssh/{{ key_name }} -N '{{ protect_phrase }}' -C '{{ key_comment }}'"
+          args:
+            creates: "{{ remote_hmfld }}/src/.ssh/{{ key_name }}"
+
+        # Set permissions for the generated private key
+        - name: Set permissions for private SSH key (600)
+          ansible.builtin.file:
+            path: "{{ remote_hmfld }}/src/.ssh/{{ key_name }}"
+            mode: '0600'
+          become: yes
+
+        # Set permissions for the generated public key
+        - name: Set permissions for public SSH key (644)
+          ansible.builtin.file:
+            path: "{{ remote_hmfld }}/src/.ssh/{{ key_name }}.pub"
+            mode: '0644'
+          become: yes
+
+        # Add the generated public key to the user's authorized_keys for future authentication
+        - name: Add public SSH key to authorized_keys
+          ansible.builtin.shell:
+            cmd: "cat {{ remote_hmfld }}/src/.ssh/{{ key_name }}.pub >> /home/{{ great_admin }}/.ssh/authorized_keys"
+          become: yes
+
+        # Set permissions for the authorized_keys file to ensure security
+        - name: Set permissions for authorized_keys
+          ansible.builtin.file:
+            path: "/home/{{ great_admin }}/.ssh/authorized_keys"
+            state: file
+            owner: "{{ great_admin }}"
+            group: "{{ great_admin }}"
+            mode: "0600"
+          become: yes
+      name: Generate SSH keys and configure authorized_keys
+
+    # Block 4: Copy the generated SSH keys from the remote machine to the local machine
+    - block:
+        # Find all SSH keys in the remote .ssh directory
+        - name: Find SSH keys in remote .ssh directory
+          ansible.builtin.find:
+            paths: "{{ remote_hmfld }}/src/.ssh/"
+            patterns: "*"
+          register: key_files
+          become: yes
+
+        # Copy the found SSH keys to the local machine for backup or use
+        - name: Copy SSH keys to local machine
+          ansible.builtin.fetch:
+            src: "{{ item.path }}"
+            dest: "{{ localfld_ssh }}/"
+            flat: yes
+          loop: "{{ key_files.files }}"
+          become: yes
+      name: Fetch SSH keys to local
+
+# Playbook 2: Connect to the remote host from localhost and execute a command
+- name: Connect to remote host and execute command from localhost
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    # Load the variables from vault and previously saved extra_vars file
+    - ~/projects/keys/vaults.yml
+    - /tmp/extra_vars.yml
+
+  vars:
+    ansible_user: "{{ great_admin }}"
+    ansible_ssh_private_key_file: "{{ localssh }}/{{ rem_host_key }}"
+
+  tasks:
+    # Execute a command on the remote host to verify the connection and SSH key authentication
+    - name: Execute a command on the remote host
+      ansible.builtin.shell: "echo 'Connected successfully!'"
+      register: command_output
+      delegate_to: "{{ rem_host_key }}"
+
+    # Output the result of the executed command
+    - name: Output command response
+      ansible.builtin.debug:
+        msg: "{{ command_output.stdout }}"
+
+    # Clean up by removing the saved extra_vars.yml file after use
+    - name: Remove extra_vars.yml after use
       ansible.builtin.file:
-        path: "{{ remote_hmfld }}/src"
-        state: directory
-        owner: "{{ admin_server }}"
-        group: "{{ admin_server }}"
-
-    - name: Make directory for SSH public key
-      ansible.builtin.file:
-        path: "{{ remote_hmfld }}/src/ssh"
-        state: directory
-        owner: "{{ admin_server }}"
-        group: "{{ admin_server }}"
-
-    - name: Copy public keys to user folders
-      ansible.builtin.copy:
-        src: "{{ local_hmfld }}/ansible/.ssh/{{ var_hst }}.pub" # the source folder
-        dest: "{{ remote_hmfld }}/src/ssh" # the destination
-        owner: "{{ admin_server }}"
-        group: "{{ admin_server }}"
-        mode: "0644"
-    
-    - name: Add SSH key to authorized_keys for the new user
-      ansible.builtin.authorized_key:
-        user: "{{ admin_server }}"
-        state: present
-        key: "{{ lookup('file', local_hmfld + '/ansible/.ssh/' + var_hst + '.pub') }}"
-    
-    - name: Remove SSH pub-key
-      ansible.builtin.file:
-        path: "{{ remote_hmfld }}/src/ssh"
+        path: /tmp/extra_vars.yml
         state: absent
-
-    - name: Check SSH connectivity to host
-      ansible.builtin.shell: "echo SSH connection successful"
-      register: ssh_check_result
-      ignore_errors: yes
-
-    - name: Fail if SSH connectivity check fails
-      ansible.builtin.fail:
-        msg: "Unable to connect to the host via SSH using the provided key."
-      when: ssh_check_result.rc != 0
