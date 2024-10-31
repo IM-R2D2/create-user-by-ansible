@@ -1,4 +1,4 @@
-# Create User Playbook
+# SSH Key Generation and User Configuration Playbook
 
 This repository contains an Ansible playbook for creating a new user with sudo privileges on target Linux servers, managing SSH key generation, and verifying SSH connectivity.
 
